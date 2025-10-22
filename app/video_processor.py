@@ -89,7 +89,7 @@ class VideoProcessor:
         )
         
         # 获取最新的检测结果
-        results = self.pose_detection_manager.get_latest_results()  
+        results = self.pose_detection_manager.get_latest_results()
         
         # 清空旧数据
         self.latest_angles_list = []

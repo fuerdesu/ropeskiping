@@ -166,10 +166,43 @@ class AsyncPoseDetector(QThread):
             
             try:
                 # 进行姿态检测
-                _, angle, keypoints = self.pose_processor.process_frame(
+                results = self.pose_processor.process_frame(
                     frame_data['frame'], 
                     frame_data['exercise_type']
                 )
+                
+                # 处理返回结果格式
+                if results is None:
+                    results = []
+                elif isinstance(results, tuple) and len(results) == 2:
+                    # 如果是元组格式 (all_angles, all_keypoints)，转换为列表格式
+                    all_angles, all_keypoints = results
+                    
+                    # 调试信息：打印原始结果格式
+                    print(f"RTMPose原始结果 - all_angles类型: {type(all_angles)}, 长度: {len(all_angles) if isinstance(all_angles, (list, tuple)) else 'N/A'}")
+                    print(f"RTMPose原始结果 - all_keypoints类型: {type(all_keypoints)}, 长度: {len(all_keypoints) if isinstance(all_keypoints, (list, tuple)) else 'N/A'}")
+                    
+                    if isinstance(all_angles, (list, tuple)) and isinstance(all_keypoints, (list, tuple)):
+                        # 多人检测结果：将角度和关键点配对
+                        results = []
+                        person_count = min(len(all_angles), len(all_keypoints))
+                        print(f"检测到{person_count}个人，开始配对角度和关键点")
+                        
+                        for i in range(person_count):
+                            results.append((all_angles[i], all_keypoints[i]))
+                            print(f"第{i+1}个人配对完成 - 角度: {all_angles[i]}, 关键点数量: {len(all_keypoints[i]) if hasattr(all_keypoints[i], '__len__') else 'N/A'}")
+                    elif isinstance(all_angles, (float, int)) and isinstance(all_keypoints, (list, tuple)):
+                        # 单人检测结果
+                        results = [(all_angles, all_keypoints)]
+                        print(f"单人检测结果 - 角度: {all_angles}, 关键点数量: {len(all_keypoints)}")
+                    else:
+                        results = []
+                        print("结果格式不匹配，设置为空列表")
+                elif not isinstance(results, list):
+                    results = []
+                    print("结果不是列表格式，设置为空列表")
+                
+                print(f"最终返回结果格式: {type(results)}, 长度: {len(results)}")
                 
                 # 记录处理时间
                 processing_time = time.time() - start_time
@@ -178,8 +211,8 @@ class AsyncPoseDetector(QThread):
                 # 发送结果
                 self.pose_detected.emit(
                     frame_data['frame_id'],
-                    angle,
-                    keypoints,
+                    results,
+                    None,
                     frame_data['timestamp']
                 )
                 
@@ -239,15 +272,15 @@ class PoseDetectionManager:
         
         # 获取最新的结果ID
         latest_id = max(self.latest_results.keys())
-        angle, keypoints = self.latest_results[latest_id]
+        results = self.latest_results[latest_id]
         
         # 返回结果列表格式，支持多人扩展
-        return [(angle, keypoints, latest_id)]
+        return results
     
-    def _on_pose_detected(self, frame_id, angle, keypoints, timestamp):
+    def _on_pose_detected(self, frame_id, results, _, timestamp):
         """处理检测结果"""
         # 保存最新结果
-        self.latest_results[frame_id] = (angle, keypoints)
+        self.latest_results[frame_id] = results
         
         # 只保留最近10个结果
         if len(self.latest_results) > 10:

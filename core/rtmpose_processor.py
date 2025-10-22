@@ -115,6 +115,11 @@ class RTMPoseProcessor:
             # 使用RTMPose进行姿态检测
             detected_keypoints, scores = self.wholebody(frame)
             
+            # 调试信息：打印检测结果格式
+            print(f"RTMPose检测结果 - detected_keypoints类型: {type(detected_keypoints)}, 长度: {len(detected_keypoints) if detected_keypoints is not None else 0}")
+            if detected_keypoints is not None and len(detected_keypoints) > 0:
+                print(f"第一个人的关键点形状: {detected_keypoints[0].shape}")
+            
             # 处理多人结果
             if detected_keypoints is not None and len(detected_keypoints) > 0:
                 # 遍历所有检测到的人
@@ -138,11 +143,13 @@ class RTMPoseProcessor:
                     all_angles.append(current_angle)
                     all_angle_points.append(angle_point)
                     
+                    print(f"检测到第{i+1}个人 - 角度: {current_angle}, 关键点数量: {len(person_keypoints)}")
+                    
         except Exception as e:
             print(f"RTMPose processing failed: {e}")
         
         # 返回多人结果
-        return all_angles, all_keypoints, all_angle_points
+        return all_angles, all_keypoints
     
     def get_exercise_angle(self, keypoints, exercise_type):
         """Get angle based on exercise type"""
