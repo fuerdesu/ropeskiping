@@ -85,3 +85,19 @@ class CounterManager:
         else:
             # 如果没有手动增加的计数，显示提示
             self.main_window.statusBar.showMessage("No manually increased count to record") 
+
+    def process_exercise_frame(self, keypoints, person_id=0):
+        """
+        统一处理不同运动类型的帧数据
+        """
+        exercise_type = self.main_window.exercise_type
+        
+        # 跳绳逻辑
+        if exercise_type == 'jump_rope':
+            self.main_window.exercise_counter.count_jump_rope(keypoints, person_id)
+            violations = self.main_window.exercise_counter.check_jump_rope_violations(keypoints, person_id)
+            if violations:
+                print(f"Person {person_id} violations: {violations}")
+        # 其他通用逻辑
+        else:
+            self.main_window.exercise_counter.count_exercise(keypoints, exercise_type, person_id)

@@ -122,11 +122,15 @@ class VideoProcessor:
                             scaled_keypoints = keypoints.copy()
                             scaled_keypoints[:, 0] *= scale_x
                             scaled_keypoints[:, 1] *= scale_y
+                            keypoints = scaled_keypoints  # 更新关键点
                             self.latest_keypoints_list.append(scaled_keypoints)
                         else:
                             self.latest_keypoints_list.append(keypoints)
                     else:
                         self.latest_keypoints_list.append(keypoints)
+                    
+                    # ⬇️ 调用 CounterManager 来处理运动逻辑（支持跳绳）
+                    self.main_window.counter_manager.process_exercise_frame(keypoints, person_id=i)
                 else:
                     self.latest_keypoints_list.append(None)
                 

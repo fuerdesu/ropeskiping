@@ -35,7 +35,8 @@ class ControlPanel(QWidget):
             "lateral_raise": T.get("lateral_raise"),
             "leg_raise": T.get("leg_raise"),
             "knee_raise": T.get("knee_raise"),
-            "knee_press": T.get("knee_press")
+            "knee_press": T.get("knee_press"),
+            "jump_rope": T.get("jump_rope"),  # ✅ 新增：跳绳
         }
         
         # Initialize model type mappings - only keep RTMPose options
