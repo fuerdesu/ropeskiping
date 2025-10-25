@@ -41,8 +41,8 @@ class CounterManager:
     def increase_counter(self, new_count):
         """手动增加计数器值"""
         self.main_window.current_count = new_count
-        # 直接更新计数器类的内部计数值
-        self.main_window.exercise_counter.counter = new_count
+        # 更新计数器类的内部计数值（使用默认person_id=0）
+        self.main_window.exercise_counter.counters[0] = new_count
         # 增加手动计数
         self.main_window.manual_count += 1
         self.main_window.statusBar.showMessage(f"Count increased to {new_count}")
@@ -50,8 +50,8 @@ class CounterManager:
     def decrease_counter(self, new_count):
         """手动减少计数器值"""
         self.main_window.current_count = new_count
-        # 直接更新计数器类的内部计数值
-        self.main_window.exercise_counter.counter = new_count
+        # 更新计数器类的内部计数值（使用默认person_id=0）
+        self.main_window.exercise_counter.counters[0] = new_count
         # 手动计数不会为负数
         if self.main_window.manual_count > 0:
             self.main_window.manual_count -= 1

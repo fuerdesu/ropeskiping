@@ -265,7 +265,13 @@ class Translations:
             "es": "Presión de rodillas",
             "hi": "नी प्रेस"
         },
-        
+        "jump_rope": {
+            "zh": "跳绳",
+            "en": "Jump Rope",
+            "es": "Saltar la cuerda",
+            "hi": "रस्सी कूदना"
+        },
+
         # Status bar messages
         "welcome": {
             "zh": "欢迎使用AI健身助手",
@@ -582,6 +588,44 @@ class Translations:
             "en": "Mirror Mode",
             "es": "Modo espejo",
             "hi": "दर्पण मोड"
+        },
+        
+        # Multi-person information
+        "multi_person_info": {
+            "zh": "多人信息",
+            "en": "Multi-Person Info",
+            "es": "Información de múltiples personas",
+            "hi": "बहु-व्यक्ति जानकारी"
+        },
+        "person": {
+            "zh": "人员",
+            "en": "Person",
+            "es": "Persona",
+            "hi": "व्यक्ति"
+        },
+        "person_id": {
+            "zh": "人员ID",
+            "en": "Person ID",
+            "es": "ID de persona",
+            "hi": "व्यक्ति आईडी"
+        },
+        "angle": {
+            "zh": "角度",
+            "en": "Angle",
+            "es": "Ángulo",
+            "hi": "कोण"
+        },
+        "count": {
+            "zh": "计数",
+            "en": "Count",
+            "es": "Recuento",
+            "hi": "गिनती"
+        },
+        "jumps": {
+            "zh": "跳跃",
+            "en": "Jumps",
+            "es": "Saltos",
+            "hi": "कूद"
         },
         
     }

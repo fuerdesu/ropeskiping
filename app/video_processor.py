@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QFileDialog
 from PyQt5.QtCore import QTimer
 from core.translations import Translations as T
 from core.async_pose_detector import PoseDetectionManager
+from app.csv_output_manager import CSVOutputManager
 
 class VideoProcessor:
     """视频处理器类 - 集成异步姿态检测"""
@@ -23,6 +24,9 @@ class VideoProcessor:
         self.pose_detection_manager = None
         self.latest_keypoints = None
         self.latest_angle = None
+        
+        # 初始化CSV输出管理器
+        self.csv_manager = CSVOutputManager()
         
         # 性能监控
         self.performance_timer = QTimer()
@@ -269,10 +273,13 @@ class VideoProcessor:
             display_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             self.main_window.video_display.update_image(display_frame)
 
-            # 多人UI更新：显示所有检测到的人的角度信息
+            # 多人UI更新：显示所有检测到的人的角度和计数信息
             if len(self.latest_angles_list) > 0:
                 # 更新UI显示多人信息
                 self.update_ui_components_multi_person(self.latest_angles_list, self.latest_keypoints_list)
+                
+                # 跳绳模式下显示每个人的计数 - 这部分逻辑已经移到update_ui_components_multi_person方法中
+                # 避免重复调用update_multi_person_info方法
             else:
                 # 无人检测时清空UI
                 self.update_ui_components(None, None)
@@ -291,8 +298,8 @@ class VideoProcessor:
             if hasattr(self.main_window.exercise_counter, 'stage'):
                 self.main_window.control_panel.update_phase(self.main_window.exercise_counter.stage)
             
-            # 获取当前计数 - 直接使用计数器属性
-            current_count = self.main_window.exercise_counter.counter
+            # 获取当前计数 - 使用总计数（所有人员的计数之和）
+            current_count = self.main_window.exercise_counter.get_total_count()
             
             # 如果计数增加且不是重置操作，播放声音（但不自动记录）
             if current_count > self.main_window.current_count and not self.main_window.is_resetting:
@@ -323,8 +330,8 @@ class VideoProcessor:
             if hasattr(self.main_window.exercise_counter, 'stage'):
                 self.main_window.control_panel.update_phase(self.main_window.exercise_counter.stage)
             
-            # 获取当前计数 - 直接使用计数器属性
-            current_count = self.main_window.exercise_counter.counter
+            # 获取当前计数 - 使用总计数方法
+            current_count = self.main_window.exercise_counter.get_total_count()
             
             # 如果计数增加且不是重置操作，播放声音（但不自动记录）
             if current_count > self.main_window.current_count and not self.main_window.is_resetting:
@@ -344,16 +351,58 @@ class VideoProcessor:
             
             # 如果有控制面板的多人显示功能，更新多人角度信息
             if hasattr(self.main_window.control_panel, 'update_multi_person_info'):
-                # 准备多人角度信息
+                # 准备多人角度信息和计数
                 multi_person_info = []
+                violations_list = []
+                
                 for i, angle in enumerate(angles_list):
                     if angle is not None:
+                        # 获取该人员的计数
+                        count = self.main_window.exercise_counter.counters.get(i + 1, 0)
+                        
+                        # 获取违规信息（跳绳模式专用）
+                        violations = []
+                        if self.main_window.exercise_type == 'jump_rope' and hasattr(self.main_window.exercise_counter, 'violations'):
+                            violations = self.main_window.exercise_counter.violations.get(i + 1, [])
+                        
                         multi_person_info.append({
                             'person_id': i + 1,
                             'angle': int(angle),
-                            'exercise_type': self.main_window.exercise_type
+                            'count': count,
+                            'exercise_type': self.main_window.exercise_type,
+                            'violations': violations
                         })
+                        
+                        violations_list.append(violations)
+                
+                # 更新控制面板的多人信息显示
                 self.main_window.control_panel.update_multi_person_info(multi_person_info)
+                
+                # 跳绳模式下，更新CSV输出
+                if self.main_window.exercise_type == 'jump_rope':
+                    # 准备CSV数据
+                    csv_data = []
+                    for i, person_info in enumerate(multi_person_info):
+                        if keypoints_list[i] is not None:
+                            # 计算人员点位（使用脚踝关键点）
+                            left_ankle = keypoints_list[i][15] if len(keypoints_list[i]) > 15 else [0, 0]
+                            right_ankle = keypoints_list[i][16] if len(keypoints_list[i]) > 16 else [0, 0]
+                            
+                            # 计算中心点
+                            center_x = (left_ankle[0] + right_ankle[0]) / 2
+                            center_y = (left_ankle[1] + right_ankle[1]) / 2
+                            
+                            csv_data.append({
+                                'person_id': person_info['person_id'],
+                                'position_x': round(center_x, 2),
+                                'position_y': round(center_y, 2),
+                                'jump_count': person_info['count'],
+                                'violations': violations_list[i]
+                            })
+                    
+                    # 更新CSV输出管理器
+                    if csv_data:
+                        self.csv_manager.update_jump_rope_data(csv_data)
                 
         except Exception as e:
             print(f"Error updating multi-person UI: {str(e)}")
@@ -495,3 +544,19 @@ class VideoProcessor:
             except:
                 # 如果回滚也失败，显示严重错误
                 self.main_window.statusBar.showMessage("Critical error in RTMPose mode switching")
+    
+    def export_csv_results(self):
+        """导出CSV结果文件"""
+        try:
+            # 导出CSV文件
+            success = self.csv_manager.export_csv()
+            if success:
+                self.main_window.statusBar.showMessage("CSV results exported successfully to /output/result.csv")
+                return True
+            else:
+                self.main_window.statusBar.showMessage("Failed to export CSV results")
+                return False
+        except Exception as e:
+            print(f"Error exporting CSV results: {str(e)}")
+            self.main_window.statusBar.showMessage(f"Error exporting CSV: {str(e)}")
+            return False

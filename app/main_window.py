@@ -343,6 +343,10 @@ class WorkoutTrackerApp(QMainWindow):
         """更新周目标"""
         self.stats_manager.update_weekly_goal(count)
     
+    def export_csv_results(self):
+        """导出CSV结果文件"""
+        self.video_processor.export_csv_results()
+    
     def closeEvent(self, event):
         """关闭窗口时清理资源"""
         # 停止视频线程
@@ -353,4 +357,4 @@ class WorkoutTrackerApp(QMainWindow):
         if hasattr(self.video_processor, 'cleanup'):
             self.video_processor.cleanup()
         
-        event.accept() 
+        event.accept()

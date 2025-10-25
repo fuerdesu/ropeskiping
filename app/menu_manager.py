@@ -45,6 +45,12 @@ class MenuManager:
         camera_mode_action.triggered.connect(self.main_window.switch_to_camera_mode)
         tools_menu.addAction(camera_mode_action)
         
+        # 导出CSV结果选项
+        export_csv_action = QAction("导出CSV结果", self.main_window)
+        export_csv_action.setShortcut("Ctrl+E")
+        export_csv_action.triggered.connect(self.main_window.export_csv_results)
+        tools_menu.addAction(export_csv_action)
+        
         # 模式菜单
         mode_menu = menubar.addMenu(T.get("mode_menu"))
         
@@ -126,4 +132,4 @@ class MenuManager:
             
             
             # 更新状态栏信息
-            self.main_window.statusBar.showMessage(T.get("language_changed")) 
+            self.main_window.statusBar.showMessage(T.get("language_changed"))

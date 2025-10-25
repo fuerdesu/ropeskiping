@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-                             QComboBox, QGroupBox)
+                             QComboBox, QGroupBox, QScrollArea)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
 from .styles import AppStyles
@@ -365,6 +365,9 @@ class ControlPanel(QWidget):
         spacer.setMinimumHeight(20)
         phase_layout.addWidget(spacer)
         
+        # Multi-person information display area
+        self.setup_multi_person_group()
+        
         self.layout.addWidget(self.phase_group)
     
     def _on_exercise_changed(self, exercise_display):
@@ -613,3 +616,100 @@ class ControlPanel(QWidget):
                 if combo_box.itemText(i) == current_text:
                     combo_box.setCurrentIndex(i)
                     break
+
+    def setup_multi_person_group(self):
+        """Setup multi-person information display group"""
+        self.multi_person_group = QGroupBox(T.get("multi_person_info"))
+        self.multi_person_group.setStyleSheet(AppStyles.get_group_box_style())
+        multi_person_layout = QVBoxLayout(self.multi_person_group)
+        
+        # Multi-person information display area
+        self.multi_person_scroll = QScrollArea()
+        self.multi_person_scroll.setWidgetResizable(True)
+        self.multi_person_scroll.setFixedHeight(120)
+        
+        # Container widget
+        self.multi_person_container = QWidget()
+        self.multi_person_layout = QVBoxLayout(self.multi_person_container)
+        self.multi_person_layout.setAlignment(Qt.AlignTop)
+        
+        self.multi_person_scroll.setWidget(self.multi_person_container)
+        multi_person_layout.addWidget(self.multi_person_scroll)
+        
+        # Initially show the group
+        self.multi_person_group.show()
+        
+        # Add to main layout
+        self.layout.addWidget(self.multi_person_group)
+
+    def update_multi_person_info(self, multi_person_info):
+        """Update multi-person information display"""
+        # Clear existing content
+        for i in reversed(range(self.multi_person_layout.count())):
+            widget = self.multi_person_layout.itemAt(i).widget()
+            if widget:
+                widget.deleteLater()
+        
+        if not multi_person_info:
+            # Hide group if no person information
+            self.multi_person_group.hide()
+            return
+        
+        # Show group
+        self.multi_person_group.show()
+        
+        # Add information for each person
+        for person_info in multi_person_info:
+            person_id = person_info.get('person_id', 0)
+            angle = person_info.get('angle', 0)
+            count = person_info.get('count', 0)
+            exercise_type = person_info.get('exercise_type', '')
+            violations = person_info.get('violations', [])
+            
+            # Create person info widget
+            person_widget = QWidget()
+            person_layout = QHBoxLayout(person_widget)
+            
+            # Person ID
+            person_id_label = QLabel(f"{T.get('person')} {person_id}:")
+            person_id_label.setStyleSheet("color: #2c3e50; font-weight: bold;")
+            
+            # Angle display
+            angle_label = QLabel(f"{T.get('angle')}: {angle}°")
+            angle_label.setStyleSheet("color: #3498db;")
+            
+            # Count display (only for jump rope)
+            if exercise_type == 'jump_rope':
+                count_label = QLabel(f"{T.get('count')}: {count}")
+                count_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            else:
+                count_label = QLabel(f"{T.get('count')}: {count}")
+                count_label.setStyleSheet("color: #95a5a6;")
+            
+            # Add to layout
+            person_layout.addWidget(person_id_label)
+            person_layout.addWidget(angle_label)
+            person_layout.addWidget(count_label)
+            
+            # Add violation indicators for jump rope
+            if exercise_type == 'jump_rope' and violations:
+                violation_text = ""
+                violation_style = "color: #e74c3c; font-weight: bold;"
+                
+                if "Single-leg jump" in violations:
+                    violation_text += "⚡"  # 单脚跳
+                if "Multiple rope rotations in one jump" in violations:
+                    violation_text += "🌀"  # 一跳多摇
+                if "Out of bounds" in violations:
+                    violation_text += "🚫"  # 出界
+                
+                if violation_text:
+                    violation_label = QLabel(violation_text)
+                    violation_label.setStyleSheet(violation_style)
+                    violation_label.setToolTip("违规类型: " + ", ".join(violations))
+                    person_layout.addWidget(violation_label)
+            
+            person_layout.addStretch()
+            
+            # Add to container
+            self.multi_person_layout.addWidget(person_widget)
