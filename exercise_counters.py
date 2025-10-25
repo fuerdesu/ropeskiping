@@ -24,7 +24,10 @@ class ExerciseCounter:
         
         # Independent counting for leg exercises
         self.leg_exercises = ['leg_raise', 'knee_raise', 'knee_press']
-    
+
+        self.jump_stages = defaultdict(lambda: None)
+        self.last_jump_times = defaultdict(float)
+
     def get_exercise_configs(self):
         """Exercise-specific angle thresholds"""
         return {
@@ -98,6 +101,16 @@ class ExerciseCounter:
                 'keypoints': {
                     'left': [11, 13, 15],  # hip, knee, ankle
                     'right': [12, 14, 16]  # hip, knee, ankle
+                }
+            },
+            'jump_rope': {
+                'type': 'height_based',
+                'jump_threshold': 0.05,  # 跳跃检测阈值（根据归一化坐标或摄像头距离调整）
+                'landing_threshold': 0.02,  # 落地判定阈值
+                'keypoints': {
+                    'left_foot': 15,
+                    'right_foot': 16,
+                    'hip_center': 11  # 可取左右髋中点，或直接使用一个髋点
                 }
             }
         }
@@ -194,23 +207,52 @@ class ExerciseCounter:
             if exercise_type not in self.exercise_configs:
                 print(f"Unknown exercise type: {exercise_type}")
                 return None
-                
+
             config = self.exercise_configs[exercise_type]
             kp = config['keypoints']
-            
-            # Calculate angles for both sides
+
+            # 🧩 如果是跳绳，用高度检测逻辑
+            if exercise_type == 'jump_rope':
+                delta_y = self.count_jump_rope(keypoints, person_id)
+                violations = self.check_jump_rope_violations(keypoints, person_id)
+
+                # 输出违规信息
+                if violations:
+                    print(f"Person {person_id} violations: {violations}")
+
+                # 检测一次完整跳跃（起跳 -> 落地）
+                if self.jump_stages.get(person_id) is None:
+                    self.jump_stages[person_id] = "landed"
+
+                if delta_y > config['jump_threshold'] and self.jump_stages[person_id] == "landed":
+                    self.jump_stages[person_id] = "jumping"
+                    # 记录起跳时间
+                    self.last_jump_times[person_id] = time.time()
+
+                elif delta_y < config['landing_threshold'] and self.jump_stages[person_id] == "jumping":
+                    self.jump_stages[person_id] = "landed"
+
+                    # 防抖与最小间隔判断（防止抖动误计数）
+                    if self.check_rep_timing(person_id):
+                        self.counters[person_id] += 1
+                        self.last_count_times[person_id] = time.time()
+                        print(f"Person {person_id} completed jump #{self.counters[person_id]}")
+
+                return delta_y
+
+            # 🧩 其他常规运动（原有逻辑）
             left_angle = self.calculate_angle(
-                keypoints[kp['left'][0]],  # first point
-                keypoints[kp['left'][1]],  # middle point
-                keypoints[kp['left'][2]]   # last point
+                keypoints[kp['left'][0]],
+                keypoints[kp['left'][1]],
+                keypoints[kp['left'][2]]
             )
-            
+
             right_angle = self.calculate_angle(
-                keypoints[kp['right'][0]],  # first point
-                keypoints[kp['right'][1]],  # middle point
-                keypoints[kp['right'][2]]   # last point
+                keypoints[kp['right'][0]],
+                keypoints[kp['right'][1]],
+                keypoints[kp['right'][2]]
             )
-            
+
             # Handle cases where one side is missing
             if left_angle is None and right_angle is None:
                 return None
@@ -218,42 +260,43 @@ class ExerciseCounter:
                 left_angle = right_angle
             elif right_angle is None:
                 right_angle = left_angle
-            
+
             # Handle leg exercises differently
             if exercise_type in self.leg_exercises:
                 return self.count_leg_exercise(left_angle, right_angle, config, person_id)
-            
+
             # For other exercises, use average angle
             avg_angle = (left_angle + right_angle) / 2
             smoothed_angle = self.smooth_angle(avg_angle, person_id)
-            
+
             if smoothed_angle is None:
                 return None
-            
+
             # Get thresholds
             up_threshold = config['up_angle']
             down_threshold = config['down_angle']
-            
+
             # Initialize stage if not set
             if self.stages[person_id] is None:
                 self.stages[person_id] = "up" if smoothed_angle > up_threshold else "down"
-            
+
             # Counting logic with timing check
             if smoothed_angle > up_threshold:
                 self.stages[person_id] = "up"
-            elif (smoothed_angle < down_threshold and 
-                  self.stages[person_id] == "up" and 
+            elif (smoothed_angle < down_threshold and
+                  self.stages[person_id] == "up" and
                   self.check_rep_timing(person_id)):
-                
+
                 self.stages[person_id] = "down"
                 self.counters[person_id] += 1
                 self.last_count_times[person_id] = time.time()
-                
+
             return smoothed_angle
-            
+
         except Exception as e:
             print(f"Exercise counting error for person {person_id}: {e}")
             return None
+
     
     def count_leg_exercise(self, left_angle, right_angle, config, person_id):
         """Count leg exercises with complete up-down cycles for a specific person"""
@@ -299,7 +342,84 @@ class ExerciseCounter:
         elif right_angle is not None:
             return right_angle
         return None
+
+    def count_jump_rope(self, keypoints, person_id=0):
+        """Count jump rope using vertical movement instead of angles"""
+        config = self.exercise_configs['jump_rope']
+        jump_threshold = config['jump_threshold']
+        landing_threshold = config['landing_threshold']
+            
+        left_foot = keypoints[config['keypoints']['left_foot']]
+        right_foot = keypoints[config['keypoints']['right_foot']]
+        hip_center = keypoints[config['keypoints']['hip_center']]
     
+        # 取平均脚底高度
+        avg_foot_y = (left_foot[1] + right_foot[1]) / 2.0
+        hip_y = hip_center[1]
+    
+        # 初始化状态缓存
+        if not hasattr(self, 'jump_rope_states'):
+            self.jump_rope_states = defaultdict(lambda: {
+                'prev_foot_y': avg_foot_y,
+                'stage': 'landed',
+                'last_jump_time': 0.0,
+                'last_jump_height': 0.0
+            })
+    
+        state = self.jump_rope_states[person_id]
+        prev_y = state['prev_foot_y']
+        delta_y = prev_y - avg_foot_y  # 正数表示上升
+    
+        # 检测“起跳”阶段
+        if state['stage'] == 'landed' and delta_y > jump_threshold:
+            state['stage'] = 'airborne'
+            state['last_jump_time'] = time.time()
+            state['last_jump_height'] = delta_y
+    
+        # 检测"落地"阶段
+        elif state['stage'] == 'airborne' and delta_y < landing_threshold:
+            state['stage'] = 'landed'
+            
+            # 在落地时检测违规行为
+            violations = self.check_jump_rope_violations(keypoints, person_id)
+            if violations:
+                print(f"跳绳违规检测 (人员{person_id}): {violations}")
+            
+            if self.check_rep_timing(person_id):
+                self.counters[person_id] += 1
+                self.last_count_times[person_id] = time.time()
+    
+        # 更新缓存
+        state['prev_foot_y'] = avg_foot_y
+        return delta_y
+
+    def check_jump_rope_violations(self, keypoints, person_id=0):
+        """Detect jump rope violations: single-leg, multiple rope rotations, out-of-bounds"""
+        violations = []
+        config = self.exercise_configs['jump_rope']
+        
+        # 使用现有的关键点配置
+        left_foot_y = keypoints[15][1]  # 左脚踝
+        right_foot_y = keypoints[16][1]  # 右脚踝
+        hip_y = (keypoints[11][1] + keypoints[12][1]) / 2  # 髋部中心
+        
+        # 1️⃣ 单脚跳检测
+        if abs(left_foot_y - right_foot_y) > 0.03:  # 具体阈值可调
+            violations.append("Single-leg jump")
+        
+        # 2️⃣ 一跳多摇检测（需要配合绳索检测或手部角速度）
+        # 这里只放占位逻辑
+        if hasattr(self, 'hand_speeds') and self.hand_speeds[person_id] > 2.5:
+            violations.append("Multiple rope rotations in one jump")
+        
+        # 3️⃣ 出界检测（x 坐标超出区域）
+        left_x = keypoints[15][0]  # 左脚踝x坐标
+        right_x = keypoints[16][0]  # 右脚踝x坐标
+        if left_x < 0.05 or right_x > 0.95:
+            violations.append("Out of bounds")
+        
+        return violations
+
     # Wrapper functions for different exercises with person ID
     def count_squat(self, keypoints, person_id=0):
         """Count squat repetitions for a specific person"""
