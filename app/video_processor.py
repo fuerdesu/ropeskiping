@@ -322,6 +322,13 @@ class VideoProcessor:
     def update_ui_components_multi_person(self, angles_list, keypoints_list):
         """更新UI组件显示 - 多人版本"""
         try:
+            # 检查角度列表是否为空或无效
+            if not angles_list or all(angle is None for angle in angles_list):
+                # 无人检测时清空UI
+                if hasattr(self.main_window.control_panel, 'update_multi_person_info'):
+                    self.main_window.control_panel.update_multi_person_info([])
+                return
+            
             # 更新状态栏显示检测到的人数
             person_count = len(angles_list)
             self.main_window.statusBar.showMessage(f"Detected {person_count} person(s)")
@@ -365,13 +372,40 @@ class VideoProcessor:
                         if self.main_window.exercise_type == 'jump_rope' and hasattr(self.main_window.exercise_counter, 'violations'):
                             violations = self.main_window.exercise_counter.violations.get(i + 1, [])
                         
-                        multi_person_info.append({
-                            'person_id': i + 1,
-                            'angle': int(angle),
-                            'count': count,
-                            'exercise_type': self.main_window.exercise_type,
-                            'violations': violations
-                        })
+                        # 跳绳模式特殊处理：使用高度信息代替角度
+                        if self.main_window.exercise_type == 'jump_rope':
+                            # 跳绳模式显示跳跃高度信息
+                            if hasattr(self.main_window.exercise_counter, 'jump_rope_states'):
+                                state = self.main_window.exercise_counter.jump_rope_states.get(i + 1, {})
+                                jump_height = state.get('last_jump_height', 0)
+                                stage = state.get('stage', 'unknown')
+                                
+                                # 将高度转换为可读格式
+                                height_display = f"{jump_height:.3f}" if jump_height > 0 else "0.000"
+                                multi_person_info.append({
+                                    'person_id': i + 1,
+                                    'angle': f"{stage} ({height_display})",
+                                    'count': count,
+                                    'exercise_type': self.main_window.exercise_type,
+                                    'violations': violations
+                                })
+                            else:
+                                multi_person_info.append({
+                                    'person_id': i + 1,
+                                    'angle': "检测中...",
+                                    'count': count,
+                                    'exercise_type': self.main_window.exercise_type,
+                                    'violations': violations
+                                })
+                        else:
+                            # 其他运动模式使用角度
+                            multi_person_info.append({
+                                'person_id': i + 1,
+                                'angle': int(angle),
+                                'count': count,
+                                'exercise_type': self.main_window.exercise_type,
+                                'violations': violations
+                            })
                         
                         violations_list.append(violations)
                 

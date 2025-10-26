@@ -193,6 +193,11 @@ class RTMPoseProcessor:
                 current_angle = self.exercise_counter.count_knee_press(keypoints)
                 if current_angle is not None:
                     angle_point = [keypoints[11], keypoints[13], keypoints[15]]
+            elif exercise_type == "jump_rope":
+                # 跳绳模式特殊处理：返回一个固定的角度值，确保角度列表不为空
+                # 这样update_ui_components_multi_person方法就能正常处理跳绳模式
+                current_angle = 0  # 跳绳模式不使用角度，但需要非None值来保持列表不为空
+                angle_point = [keypoints[15], keypoints[16]] if len(keypoints) > 16 else None
         except Exception as e:
             print(f"Error calculating exercise angle: {e}")
             
