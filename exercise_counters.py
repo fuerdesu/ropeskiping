@@ -451,86 +451,71 @@ class ExerciseCounter:
         return delta_y
 
     def check_jump_rope_violations(self, keypoints, person_id=0):
-        """Detect jump rope violations: single-leg, multiple rope rotations, out-of-bounds"""
+        """检测跳绳违规情况，包括：单脚跳和跳跃姿态异常"""
         violations = []
-        config = self.exercise_configs['jump_rope']
         
-        # 初始化违规信息存储
-        if not hasattr(self, 'violations'):
-            self.violations = defaultdict(list)
-        if not hasattr(self, 'last_hand_time'):
-            self.last_hand_time = defaultdict(float)
+        # 初始化违规状态追踪
+        if not hasattr(self, 'violation_states'):
+            self.violation_states = defaultdict(lambda: {
+                'consecutive_single_leg': 0,  # 连续单脚跳次数
+                'last_violation_time': 0,     # 上次违规时间
+                'violation_history': deque(maxlen=5)  # 最近5次违规记录
+            })
         
-        # 使用现有的关键点配置
-        left_foot_y = keypoints[15][1]  # 左脚踝
+        state = self.violation_states[person_id]
+        current_time = time.time()
+        
+        # 只在新的检测周期开始时重置计数（避免频繁重置）
+        if current_time - state['last_violation_time'] > 2.0:  # 2秒无违规则重置
+            state['consecutive_single_leg'] = 0
+            state['violation_history'].clear()
+        
+        # 获取关键点
+        left_foot_y = keypoints[15][1]   # 左脚踝
         right_foot_y = keypoints[16][1]  # 右脚踝
-        left_wrist_y = keypoints[9][1]  # 左手腕
-        right_wrist_y = keypoints[10][1]  # 右手腕
+        left_knee_y = keypoints[13][1]   # 左膝
+        right_knee_y = keypoints[14][1]  # 右膝
         hip_y = (keypoints[11][1] + keypoints[12][1]) / 2  # 髋部中心
         
-        # 1️⃣ 单脚跳检测 - 增强版
+        # 1️⃣ 单脚跳检测（更严格的判定）
         foot_height_diff = abs(left_foot_y - right_foot_y)
-        if foot_height_diff > 0.03:  # 具体阈值可调
-            violations.append("单脚跳")
+        knee_height_diff = abs(left_knee_y - right_knee_y)
         
-        # 2️⃣ 一跳多摇检测 - 基于手腕运动速度
-        if not hasattr(self, 'hand_speeds'):
-            self.hand_speeds = defaultdict(lambda: deque(maxlen=5))
-        if not hasattr(self, 'prev_wrist_positions'):
-            self.prev_wrist_positions = defaultdict(lambda: {'left': None, 'right': None})
+        # 同时考虑脚踝和膝盖的高度差，并检查连续性
+        if foot_height_diff > 0.05 and knee_height_diff > 0.04:  # 提高阈值
+            state['consecutive_single_leg'] += 1
+            if state['consecutive_single_leg'] >= 3:  # 需要连续3次检测到才报警
+                violations.append("单脚跳")
+        else:
+            state['consecutive_single_leg'] = max(0, state['consecutive_single_leg'] - 1)
         
-        current_time = time.time()
-        prev_pos = self.prev_wrist_positions[person_id]
-        
-        # 计算手腕运动速度
-        if prev_pos['left'] is not None and prev_pos['right'] is not None:
-            time_diff = current_time - self.last_hand_time.get(person_id, current_time)
-            if time_diff > 0:
-                left_speed = abs(left_wrist_y - prev_pos['left']) / time_diff
-                right_speed = abs(right_wrist_y - prev_pos['right']) / time_diff
-                avg_speed = (left_speed + right_speed) / 2
-                
-                self.hand_speeds[person_id].append(avg_speed)
-                
-                # 检测一跳多摇：手腕运动速度过快
-                if len(self.hand_speeds[person_id]) >= 3:
-                    recent_speeds = list(self.hand_speeds[person_id])[-3:]
-                    if all(speed > 1.5 for speed in recent_speeds):  # 调整阈值
-                        violations.append("一跳多摇")
-        
-        # 更新手腕位置和时间
-        self.prev_wrist_positions[person_id] = {'left': left_wrist_y, 'right': right_wrist_y}
-        self.last_hand_time[person_id] = current_time
-        
-        # 3️⃣ 出界检测 - 增强版
-        left_x = keypoints[15][0]  # 左脚踝x坐标
-        right_x = keypoints[16][0]  # 右脚踝x坐标
-        
-        # 定义边界区域（可调整）
-        left_boundary = 0.05
-        right_boundary = 0.95
-        
-        # 检测是否出界
-        if left_x < left_boundary or right_x > right_boundary:
-            violations.append("出界")
-        
-        # 4️⃣ 跳跃高度异常检测
+        # 2️⃣ 跳跃姿态检测
         if hasattr(self, 'jump_rope_states'):
-            state = self.jump_rope_states.get(person_id, {})
-            jump_height = state.get('last_jump_height', 0)
+            jump_state = self.jump_rope_states.get(person_id, {})
             
-            # 检测跳跃高度过低或过高
-            if jump_height < 0.01:  # 跳跃高度过低
-                violations.append("跳跃高度过低")
-            elif jump_height > 0.15:  # 跳跃高度过高
-                violations.append("跳跃高度过高")
+            # 获取跳跃相关数据
+            jump_height = jump_state.get('last_jump_height', 0)
+            movement_history = list(jump_state.get('movement_history', []))
+            
+            # 只在空中阶段检测姿态
+            if jump_state.get('stage') == 'airborne':
+                # 计算身体姿态的稳定性
+                hip_to_foot_ratio = (hip_y - left_foot_y) / (hip_y - right_foot_y)
+                
+                # 检测极端情况
+                if jump_height > 0.2:  # 跳跃过高（可能是跨步或跑动）
+                    violations.append("动作过大")
+                elif (hip_to_foot_ratio < 0.7 or hip_to_foot_ratio > 1.3) and \
+                     state['consecutive_single_leg'] >= 2:  # 身体倾斜过度
+                    violations.append("姿态不稳")
         
-        # 存储违规信息到violations属性
+        # 更新违规历史
         if violations:
-            self.violations[person_id].extend(violations)
-            # 限制每个人员的违规记录数量，避免内存泄漏
-            if len(self.violations[person_id]) > 10:
-                self.violations[person_id] = self.violations[person_id][-10:]
+            state['violation_history'].append((current_time, violations))
+            state['last_violation_time'] = current_time
+            
+            # 只保留最近的违规记录
+            self.violations[person_id] = violations
         
         return violations
 
