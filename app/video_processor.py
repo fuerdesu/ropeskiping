@@ -4,6 +4,7 @@
 
 import cv2
 import os
+import numpy as np
 from PyQt5.QtWidgets import QFileDialog
 from PyQt5.QtCore import QTimer
 from core.translations import Translations as T
@@ -20,6 +21,10 @@ class VideoProcessor:
         self.latest_keypoints_list = []  # 存储多人的关键点
         self.latest_angles_list = []     # 存储多人的角度
         self.person_count = 0           # 检测到的人数
+
+        self.previous_centers = {}   # 上一帧的中心点 {person_id: (x, y)}
+        self.next_person_id = 1      # 分配新person_id用
+
         # 初始化异步姿态检测管理器
         self.pose_detection_manager = None
         self.latest_keypoints = None
@@ -104,7 +109,11 @@ class VideoProcessor:
             return
         
         self.person_count = len(results)
-        
+        # 先提取关键点以便位置匹配
+        raw_keypoints_list = [res[1] if res else None for res in results]
+        # 获取图像宽度用于动态阈值计算
+        frame_width = inference_frame.shape[1]
+        id_map = self.match_person_ids(raw_keypoints_list, frame_width)
         # 遍历所有检测到的人
         for i, result in enumerate(results):
             if not result:
@@ -134,7 +143,9 @@ class VideoProcessor:
                         self.latest_keypoints_list.append(keypoints)
                     
                     # ⬇️ 调用 CounterManager 来处理运动逻辑（支持跳绳）
-                    self.main_window.counter_manager.process_exercise_frame(keypoints, person_id=i)
+                    person_id = id_map.get(i, i + 1)
+                    self.main_window.counter_manager.process_exercise_frame(keypoints, person_id=person_id)
+
                 else:
                     self.latest_keypoints_list.append(None)
                 
@@ -150,7 +161,9 @@ class VideoProcessor:
         if len(self.latest_keypoints_list) > 0:
             self.latest_keypoints = self.latest_keypoints_list[0]
             self.latest_angle = self.latest_angles_list[0]
-        
+            
+        self.id_map = id_map  # 保存稳定ID映射，供UI绘制使用
+
     def _log_performance(self):
         """记录性能统计"""
         if self.pose_detection_manager:
@@ -159,6 +172,98 @@ class VideoProcessor:
                   f"Avg Time: {stats['avg_processing_time']:.1f}ms, "
                   f"FPS: {stats['fps']:.1f}, "
                   f"Queue: {stats['queue_size']}")
+
+    def match_person_ids(self, detected_keypoints_list, frame_width=640):
+        """
+        根据关键点位置匹配跨帧ID，确保person_id稳定
+        
+        Args:
+            detected_keypoints_list: 检测到的关键点列表
+            frame_width: 图像宽度，用于动态阈值计算
+        """
+        matched = {}  # {new_index: stable_id}
+        new_centers = {}
+        
+        # 动态阈值设置：基于图像尺寸的比例
+        distance_threshold = frame_width * 0.15  # 15%的图像宽度作为阈值
+        
+        # 跟踪ID的活跃状态
+        active_ids = set()
+
+        for new_i, keypoints in enumerate(detected_keypoints_list):
+            if keypoints is None or len(keypoints) < 17:
+                continue
+
+            # 用双脚踝或髋关节中心估计人体位置
+            try:
+                left_ankle = keypoints[15][:2]
+                right_ankle = keypoints[16][:2]
+                center = np.mean([left_ankle, right_ankle], axis=0)
+            except Exception:
+                center = np.mean(keypoints[:, :2], axis=0)
+
+            best_id, best_dist = None, float('inf')
+            for pid, prev_center in self.previous_centers.items():
+                dist = np.linalg.norm(center - prev_center)
+                if dist < distance_threshold and dist < best_dist:
+                    best_id, best_dist = pid, dist
+
+            if best_id is not None:
+                matched[new_i] = best_id
+                active_ids.add(best_id)
+            else:
+                # 检查是否可以重用最近不活跃的ID（改进的重用逻辑）
+                reused_id = None
+                min_reuse_dist = float('inf')
+                
+                for pid in self.previous_centers.keys():
+                    if pid not in active_ids:
+                        # 检查距离是否在可接受范围内
+                        dist = np.linalg.norm(center - self.previous_centers[pid])
+                        if dist < distance_threshold * 1.5 and dist < min_reuse_dist:
+                            reused_id = pid
+                            min_reuse_dist = dist
+                
+                if reused_id is not None:
+                    matched[new_i] = reused_id
+                    active_ids.add(reused_id)
+                else:
+                    # 分配新ID，确保不重复
+                    while self.next_person_id in active_ids:
+                        self.next_person_id += 1
+                    matched[new_i] = self.next_person_id
+                    active_ids.add(self.next_person_id)
+                    self.next_person_id += 1
+
+            new_centers[matched[new_i]] = center
+
+        # 清理长时间不活跃的ID
+        max_id_age = 30  # 最大ID保留帧数
+        if hasattr(self, 'id_age_counter'):
+            # 更新ID年龄计数器
+            for pid in list(self.id_age_counter.keys()):
+                if pid in active_ids:
+                    self.id_age_counter[pid] = 0  # 重置活跃ID的年龄
+                else:
+                    self.id_age_counter[pid] += 1
+                    # 移除过老的ID
+                    if self.id_age_counter[pid] > max_id_age:
+                        if pid in self.previous_centers:
+                            del self.previous_centers[pid]
+                        del self.id_age_counter[pid]
+            
+            # 添加新ID到年龄计数器
+            for pid in active_ids:
+                if pid not in self.id_age_counter:
+                    self.id_age_counter[pid] = 0
+        else:
+            # 初始化ID年龄计数器
+            self.id_age_counter = {}
+            for pid in active_ids:
+                self.id_age_counter[pid] = 0
+
+        self.previous_centers = new_centers
+        return matched
     
     def update_model_mode(self, model_mode):
         """更新模型模式"""
@@ -261,7 +366,10 @@ class VideoProcessor:
                         display_frame = self.draw_skeleton_on_frame(display_frame, keypoints)
                         # 在骨架上方添加人员ID
                         if len(keypoints) > 0 and keypoints[0][0] > 0 and keypoints[0][1] > 0:
-                            cv2.putText(display_frame, f"Person {i+1}", 
+                            stable_id = getattr(self, "id_map", None)
+                            pid = stable_id.get(i, i + 1) if stable_id else i + 1
+                            cv2.putText(display_frame, f"Person {pid}",
+
                                        (int(keypoints[0][0]) - 20, int(keypoints[0][1]) - 30), 
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
