@@ -139,7 +139,7 @@ class ControlPanel(QWidget):
             self.exercise_combo.addItem(display)
         
         # Set default selected item
-        overhead_press_text = self.exercise_display_map.get("overhead_press", "")
+        overhead_press_text = self.exercise_display_map.get("jump_rope", "")
         if overhead_press_text:
             self.exercise_combo.setCurrentText(overhead_press_text)
             

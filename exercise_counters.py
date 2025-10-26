@@ -109,13 +109,20 @@ class ExerciseCounter:
             },
             'jump_rope': {
                 'type': 'height_based',
-                'jump_threshold': 0.04,  # 优化后的跳跃检测阈值
-                'landing_threshold': 0.02,  # 优化后的落地判定阈值
-                'min_jump_height': 0.05,  # 优化后的最小跳跃高度
+                'jump_threshold': 0.025,    # 更严格的跳跃检测阈值
+                'landing_threshold': 0.015,  # 更严格的落地判定阈值
+                'min_jump_height': 0.035,   # 更严格的最小跳跃高度
+                'stability_frames': 3,       # 要求连续稳定帧数
+                'max_jump_duration': 0.8,    # 最大跳跃持续时间
+                'min_jump_interval': 0.25,   # 最小跳跃间隔
                 'keypoints': {
                     'left_foot': 15,
                     'right_foot': 16,
-                    'hip_center': 11  # 可取左右髋中点，或直接使用一个髋点
+                    'hip_center': 11,      # 使用左右髋中点
+                    'left_hip': 11,        # 新增：用于稳定性检查
+                    'right_hip': 12,       # 新增：用于稳定性检查
+                    'left_knee': 13,       # 新增：用于姿态检查
+                    'right_knee': 14       # 新增：用于姿态检查
                 }
             }
         }
@@ -332,7 +339,7 @@ class ExerciseCounter:
         return None
 
     def count_jump_rope(self, keypoints, person_id=0):
-        """Count jump rope using vertical movement instead of angles"""
+        """Count jump rope using vertical movement with enhanced stability checks"""
         config = self.exercise_configs['jump_rope']
         jump_threshold = config['jump_threshold']
         landing_threshold = config['landing_threshold']
@@ -345,78 +352,98 @@ class ExerciseCounter:
         avg_foot_y = (left_foot[1] + right_foot[1]) / 2.0
         hip_y = hip_center[1]
     
-        # 初始化状态缓存
+        # 扩展状态缓存以包含更多稳定性检查
         if not hasattr(self, 'jump_rope_states'):
             self.jump_rope_states = defaultdict(lambda: {
                 'prev_foot_y': avg_foot_y,
                 'stage': 'landed',
                 'last_jump_time': 0.0,
                 'last_jump_height': 0.0,
-                'stable_frames': 0,  # 稳定帧数计数器
-                'last_stable_y': avg_foot_y,  # 上次稳定位置
-                'jump_start_y': avg_foot_y,  # 跳跃起始高度
-                'jump_peak_y': avg_foot_y,   # 跳跃峰值高度
-                'min_jump_height': config.get('min_jump_height', 0.05)  # 从配置获取最小跳跃高度
+                'stable_frames': 0,
+                'last_stable_y': avg_foot_y,
+                'jump_start_y': avg_foot_y,
+                'jump_peak_y': avg_foot_y,
+                'min_jump_height': config.get('min_jump_height', 0.05),
+                'movement_history': deque(maxlen=5),  # 新增：移动历史
+                'height_history': deque(maxlen=10),   # 新增：高度历史
+                'false_start_count': 0,               # 新增：误判计数器
+                'consecutive_jumps': 0                # 新增：连续跳跃计数
             })
 
         state = self.jump_rope_states[person_id]
         prev_y = state['prev_foot_y']
-        delta_y = avg_foot_y - prev_y  # 正数表示上升（y坐标减小）
+        delta_y = avg_foot_y - prev_y
+
+        # 记录移动历史
+        state['movement_history'].append(delta_y)
+        state['height_history'].append(avg_foot_y)
         
-        # 计算髋部移动距离
+        # 计算髋部移动和稳定性
         if not hasattr(state, 'prev_hip_y'):
             state['prev_hip_y'] = hip_y
         hip_delta_y = hip_y - state['prev_hip_y']
         
-        # 检测脚部稳定性（只在landed阶段进行）
-        stability_threshold = 0.005  # 稳定性检测阈值
+        # 增强的稳定性检测
+        stability_threshold = 0.003  # 降低阈值，提高稳定性要求
+        movement_variance = np.var(list(state['movement_history'])) if len(state['movement_history']) > 3 else float('inf')
+        is_movement_stable = movement_variance < 0.0001  # 新增：检查移动的方差
+        
+        # 优化的landed状态稳定性检测
         if state['stage'] == 'landed':
-            if abs(avg_foot_y - state['last_stable_y']) < stability_threshold:
+            if abs(avg_foot_y - state['last_stable_y']) < stability_threshold and is_movement_stable:
                 state['stable_frames'] += 1
+                if state['stable_frames'] >= 3:  # 需要连续3帧稳定
+                    state['last_stable_y'] = avg_foot_y
+                    state['false_start_count'] = max(0, state['false_start_count'] - 1)  # 稳定时减少误判计数
             else:
                 state['stable_frames'] = 0
-                state['last_stable_y'] = avg_foot_y
-        else:
-            # 在airborne阶段，不需要稳定检测
-            state['stable_frames'] = 0
+        
+        # 增强的起跳检测逻辑
+        if state['stage'] == 'landed':
+            # 要求更严格的起跳条件
+            consistent_upward = all(dy < -0.01 for dy in list(state['movement_history'])[-3:]) if len(state['movement_history']) >= 3 else False
+            significant_movement = abs(delta_y) > jump_threshold
+            stable_before_jump = state['stable_frames'] >= 2
+            hip_stable = abs(hip_delta_y) < 0.02  # 髋部相对稳定
+            
+            if consistent_upward and significant_movement and stable_before_jump and hip_stable:
+                state['stage'] = 'airborne'
+                state['last_jump_time'] = time.time()
+                state['jump_start_y'] = prev_y
+                state['jump_peak_y'] = avg_foot_y
+                state['consecutive_jumps'] += 1
+            else:
+                state['false_start_count'] += 1
+                if state['false_start_count'] >= 5:  # 连续5次误判，提高阈值
+                    jump_threshold *= 1.1
+                    state['false_start_count'] = 0
 
-        # 检测"起跳"阶段 - 优化后的逻辑
-        if (state['stage'] == 'landed' and 
-            abs(delta_y) > jump_threshold and  # 使用绝对值检测跳跃
-            delta_y < 0):  # 确保是上升阶段（y坐标减小）
-            # 直接检测到明显的脚部上升就进入起跳阶段
-            state['stage'] = 'airborne'
-            state['last_jump_time'] = time.time()
-            state['jump_start_y'] = prev_y  # 记录跳跃起始高度
-            state['jump_peak_y'] = avg_foot_y  # 初始化峰值高度
-
-        # 在空中阶段更新峰值高度和检测落地
+        # 优化的空中阶段和落地检测
         if state['stage'] == 'airborne':
-            if avg_foot_y < state['jump_peak_y']:  # 找到更低的y值（更高的跳跃）
+            if avg_foot_y < state['jump_peak_y']:
                 state['jump_peak_y'] = avg_foot_y
             
-            # 简化落地检测逻辑：当脚开始下降或接近起始位置时判定为落地
+            # 更严格的落地检测
             is_descending = delta_y > 0
             near_start_position = abs(avg_foot_y - state['jump_start_y']) < landing_threshold
+            stable_landing = movement_variance < 0.0002  # 要求落地时movement较稳定
             
-            if is_descending or near_start_position:
-                # 计算实际跳跃高度
-                actual_jump_height = state['jump_start_y'] - state['jump_peak_y']
+            if (is_descending and near_start_position and stable_landing) or \
+               (time.time() - state['last_jump_time'] > 0.8):  # 防止空中停留时间过长
                 
-                # 只有达到最小跳跃高度才计数
-                if actual_jump_height >= state['min_jump_height']:
-                    state['stage'] = 'landed'
-                    state['last_jump_height'] = actual_jump_height
-                    
-                    # 简化时间间隔检查，确保能正确计数连续跳跃
+                actual_jump_height = state['jump_start_y'] - state['jump_peak_y']
+                min_required_height = state['min_jump_height'] * (1 + 0.1 * state['consecutive_jumps'])  # 连续跳跃要求逐渐提高
+                
+                if actual_jump_height >= min_required_height:
                     current_time = time.time()
-                    if person_id not in self.last_count_times or \
-                       current_time - self.last_count_times.get(person_id, 0) > 0.2:  # 平衡计数速度和误报
+                    if current_time - self.last_count_times.get(person_id, 0) > 0.25:  # 增加最小时间间隔
                         self.counters[person_id] += 1
                         self.last_count_times[person_id] = current_time
                 else:
-                    # 跳跃高度不足，不计数
-                    state['stage'] = 'landed'
+                    state['consecutive_jumps'] = 0  # 重置连续跳跃计数
+                
+                state['stage'] = 'landed'
+                state['last_jump_height'] = actual_jump_height
 
         # 更新缓存
         state['prev_foot_y'] = avg_foot_y

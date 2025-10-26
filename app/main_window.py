@@ -79,7 +79,7 @@ class WorkoutTrackerApp(QMainWindow):
         )
         
         # 设置默认运动类型
-        self.exercise_type = "overhead_press"
+        self.exercise_type = "jump_rope"
         
         # 创建声音管理器
         self.sound_manager = SoundManager()
