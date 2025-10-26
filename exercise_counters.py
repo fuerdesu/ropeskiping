@@ -109,8 +109,9 @@ class ExerciseCounter:
             },
             'jump_rope': {
                 'type': 'height_based',
-                'jump_threshold': 0.02,  # 进一步降低跳跃检测阈值，提高灵敏度
-                'landing_threshold': 0.02,  # 降低落地判定阈值
+                'jump_threshold': 0.04,  # 优化后的跳跃检测阈值
+                'landing_threshold': 0.02,  # 优化后的落地判定阈值
+                'min_jump_height': 0.05,  # 优化后的最小跳跃高度
                 'keypoints': {
                     'left_foot': 15,
                     'right_foot': 16,
@@ -355,12 +356,17 @@ class ExerciseCounter:
                 'last_stable_y': avg_foot_y,  # 上次稳定位置
                 'jump_start_y': avg_foot_y,  # 跳跃起始高度
                 'jump_peak_y': avg_foot_y,   # 跳跃峰值高度
-                'min_jump_height': 0.03       # 最小有效跳跃高度
+                'min_jump_height': config.get('min_jump_height', 0.05)  # 从配置获取最小跳跃高度
             })
-    
+
         state = self.jump_rope_states[person_id]
         prev_y = state['prev_foot_y']
         delta_y = avg_foot_y - prev_y  # 正数表示上升（y坐标减小）
+        
+        # 计算髋部移动距离
+        if not hasattr(state, 'prev_hip_y'):
+            state['prev_hip_y'] = hip_y
+        hip_delta_y = hip_y - state['prev_hip_y']
         
         # 检测脚部稳定性（只在landed阶段进行）
         stability_threshold = 0.005  # 稳定性检测阈值
@@ -373,25 +379,27 @@ class ExerciseCounter:
         else:
             # 在airborne阶段，不需要稳定检测
             state['stable_frames'] = 0
-    
-        # 检测"起跳"阶段 - 简化逻辑，移除稳定帧数要求
+
+        # 检测"起跳"阶段 - 优化后的逻辑
         if (state['stage'] == 'landed' and 
             abs(delta_y) > jump_threshold and  # 使用绝对值检测跳跃
             delta_y < 0):  # 确保是上升阶段（y坐标减小）
+            # 直接检测到明显的脚部上升就进入起跳阶段
             state['stage'] = 'airborne'
             state['last_jump_time'] = time.time()
             state['jump_start_y'] = prev_y  # 记录跳跃起始高度
             state['jump_peak_y'] = avg_foot_y  # 初始化峰值高度
-            state['stable_frames'] = 0  # 重置稳定帧数
-            print(f"Person {person_id}: Jump detected - height: {abs(delta_y):.3f}")
-    
+
         # 在空中阶段更新峰值高度和检测落地
         if state['stage'] == 'airborne':
             if avg_foot_y < state['jump_peak_y']:  # 找到更低的y值（更高的跳跃）
                 state['jump_peak_y'] = avg_foot_y
             
-            # 检测"落地"阶段 - 简化逻辑，移除稳定帧数要求
-            if delta_y > 0:  # 下降阶段结束，开始上升（y坐标减小）
+            # 简化落地检测逻辑：当脚开始下降或接近起始位置时判定为落地
+            is_descending = delta_y > 0
+            near_start_position = abs(avg_foot_y - state['jump_start_y']) < landing_threshold
+            
+            if is_descending or near_start_position:
                 # 计算实际跳跃高度
                 actual_jump_height = state['jump_start_y'] - state['jump_peak_y']
                 
@@ -400,22 +408,19 @@ class ExerciseCounter:
                     state['stage'] = 'landed'
                     state['last_jump_height'] = actual_jump_height
                     
-                    # 在落地时检测违规行为
-                    violations = self.check_jump_rope_violations(keypoints, person_id)
-                    if violations:
-                        print(f"跳绳违规检测 (人员{person_id}): {violations}")
-                    
-                    if self.check_rep_timing(person_id):
+                    # 简化时间间隔检查，确保能正确计数连续跳跃
+                    current_time = time.time()
+                    if person_id not in self.last_count_times or \
+                       current_time - self.last_count_times.get(person_id, 0) > 0.2:  # 平衡计数速度和误报
                         self.counters[person_id] += 1
-                        self.last_count_times[person_id] = time.time()
-                        print(f"Person {person_id}: Valid jump counted! Height: {actual_jump_height:.3f}, Total: {self.counters[person_id]}")
+                        self.last_count_times[person_id] = current_time
                 else:
                     # 跳跃高度不足，不计数
                     state['stage'] = 'landed'
-                    print(f"Person {person_id}: Jump too low ({actual_jump_height:.3f}), not counted")
-    
+
         # 更新缓存
         state['prev_foot_y'] = avg_foot_y
+        state['prev_hip_y'] = hip_y
         return delta_y
 
     def check_jump_rope_violations(self, keypoints, person_id=0):
